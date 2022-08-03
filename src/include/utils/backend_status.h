@@ -311,7 +311,6 @@ extern uint64 pgstat_get_my_query_id(void);
 extern void pgstat_report_backend_mem_allocated_increase(uint64 allocation);
 extern void pgstat_report_backend_mem_allocated_decrease(uint64 allocation);
 extern uint64 pgstat_get_all_backend_memory_allocated(void);
-extern uint64 pgstat_get_my_backend_memory_allocated(int pid);
 
 /* ----------
  * Support functions for the SQL-callable functions to
