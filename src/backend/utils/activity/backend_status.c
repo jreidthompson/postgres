@@ -49,6 +49,8 @@ int			pgstat_track_activity_query_size = 1024;
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
 
+/* Memory allocated to this backend prior to stats initialization */
+uint64		backend_mem_allocated = 0;
 
 static PgBackendStatus *BackendStatusArray = NULL;
 static char *BackendAppnameBuffer = NULL;
@@ -399,6 +401,13 @@ pgstat_bestart(void)
 	lbeentry.st_progress_command = PROGRESS_COMMAND_INVALID;
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);
+
+	/*
+	 * Move sum of memory allocated prior to stats initialization to
+	 * stats and zero the local variable.
+	 */
+	lbeentry.backend_mem_allocated = backend_mem_allocated;
+	backend_mem_allocated = 0;
 
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
@@ -1147,4 +1156,62 @@ pgstat_clip_activity(const char *raw_activity)
 	activity[cliplen] = '\0';
 
 	return activity;
+}
+
+/* --------
+ * pgstat_report_backend_mem_allocated_increase() -
+ *
+ * Called to report increase in memory allocated for this backend
+ * --------
+ */
+void
+pgstat_report_backend_mem_allocated_increase(uint64 allocation)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry || !pgstat_track_activities)
+	{
+		/* account for memory before stats is initialized */
+		backend_mem_allocated += allocation;
+
+		return;
+	}
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->backend_mem_allocated += allocation;
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+/* --------
+ * pgstat_report_backend_mem_allocated_decrease() -
+ *
+ * Called to report decrease in memory allocated for this backend
+ * --------
+ */
+void
+pgstat_report_backend_mem_allocated_decrease(uint64 allocation)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry || !pgstat_track_activities)
+	{
+		/* account for memory before stats is initialized */
+		backend_mem_allocated -= allocation;
+
+		return;
+	}
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->backend_mem_allocated -= allocation;
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
