@@ -37,6 +37,7 @@
 
 #include "lib/ilist.h"
 #include "port/pg_bitutils.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -259,6 +260,7 @@ GenerationContextCreate(MemoryContext parent,
 						name);
 
 	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	pgstat_report_allocated_bytes_increase(firstBlockSize, PG_ALLOC_GENERATION);
 
 	return (MemoryContext) set;
 }
@@ -275,6 +277,7 @@ GenerationReset(MemoryContext context)
 {
 	GenerationContext *set = (GenerationContext *) context;
 	dlist_mutable_iter miter;
+	uint64		deallocation = 0;
 
 	Assert(GenerationIsValid(set));
 
@@ -297,8 +300,13 @@ GenerationReset(MemoryContext context)
 		if (block == set->keeper)
 			GenerationBlockMarkEmpty(block);
 		else
+		{
+			deallocation += block->blksize;
 			GenerationBlockFree(set, block);
+		}
 	}
+
+	pgstat_report_allocated_bytes_decrease(deallocation, PG_ALLOC_GENERATION);
 
 	/* set it so new allocations to make use of the keeper block */
 	set->block = set->keeper;
@@ -320,6 +328,9 @@ GenerationDelete(MemoryContext context)
 {
 	/* Reset to release all releasable GenerationBlocks */
 	GenerationReset(context);
+
+	pgstat_report_allocated_bytes_decrease(context->mem_allocated, PG_ALLOC_GENERATION);
+
 	/* And free the context header and keeper block */
 	free(context);
 }
@@ -366,6 +377,7 @@ GenerationAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		pgstat_report_allocated_bytes_increase(blksize, PG_ALLOC_GENERATION);
 
 		/* block with a single (used) chunk */
 		block->context = set;
@@ -469,6 +481,7 @@ GenerationAlloc(MemoryContext context, Size size)
 				return NULL;
 
 			context->mem_allocated += blksize;
+			pgstat_report_allocated_bytes_increase(blksize, PG_ALLOC_GENERATION);
 
 			/* initialize the new block */
 			GenerationBlockInit(set, block, blksize);
@@ -721,6 +734,8 @@ GenerationFree(void *pointer)
 	dlist_delete(&block->node);
 
 	set->header.mem_allocated -= block->blksize;
+	pgstat_report_allocated_bytes_decrease(block->blksize, PG_ALLOC_GENERATION);
+
 	free(block);
 }
 

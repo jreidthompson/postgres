@@ -69,6 +69,7 @@
 #include "postgres.h"
 
 #include "lib/ilist.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -413,6 +414,13 @@ SlabContextCreate(MemoryContext parent,
 						parent,
 						name);
 
+	/*
+	 * If SlabContextCreate is updated to add context header size to
+	 * context->mem_allocated, then update here and SlabDelete appropriately
+	 */
+	pgstat_report_allocated_bytes_increase(Slab_CONTEXT_HDRSZ(slab->chunksPerBlock),
+										   PG_ALLOC_SLAB);
+
 	return (MemoryContext) slab;
 }
 
@@ -429,6 +437,7 @@ SlabReset(MemoryContext context)
 	SlabContext *slab = (SlabContext *) context;
 	dlist_mutable_iter miter;
 	int			i;
+	uint64		deallocation = 0;
 
 	Assert(SlabIsValid(slab));
 
@@ -449,6 +458,7 @@ SlabReset(MemoryContext context)
 #endif
 		free(block);
 		context->mem_allocated -= slab->blockSize;
+		deallocation += slab->blockSize;
 	}
 
 	/* walk over blocklist and free the blocks */
@@ -465,9 +475,11 @@ SlabReset(MemoryContext context)
 #endif
 			free(block);
 			context->mem_allocated -= slab->blockSize;
+			deallocation += slab->blockSize;
 		}
 	}
 
+	pgstat_report_allocated_bytes_decrease(deallocation, PG_ALLOC_SLAB);
 	slab->curBlocklistIndex = 0;
 
 	Assert(context->mem_allocated == 0);
@@ -482,6 +494,14 @@ SlabDelete(MemoryContext context)
 {
 	/* Reset to release all the SlabBlocks */
 	SlabReset(context);
+
+	/*
+	 * Until context header allocation is included in context->mem_allocated,
+	 * cast to slab and decrement the header allocation
+	 */
+	pgstat_report_allocated_bytes_decrease(Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock),
+										   PG_ALLOC_SLAB);
+
 	/* And free the context header */
 	free(context);
 }
@@ -546,6 +566,7 @@ SlabAlloc(MemoryContext context, Size size)
 
 			block->slab = slab;
 			context->mem_allocated += slab->blockSize;
+			pgstat_report_allocated_bytes_increase(slab->blockSize, PG_ALLOC_SLAB);
 
 			/* use the first chunk in the new block */
 			chunk = SlabBlockGetChunk(slab, block, 0);
@@ -740,6 +761,7 @@ SlabFree(void *pointer)
 #endif
 			free(block);
 			slab->header.mem_allocated -= slab->blockSize;
+			pgstat_report_allocated_bytes_decrease(slab->blockSize, PG_ALLOC_SLAB);
 		}
 
 		/*
