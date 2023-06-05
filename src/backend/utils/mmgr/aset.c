@@ -591,7 +591,9 @@ AllocSetReset(MemoryContext context)
 	}
 
 	Assert(context->mem_allocated == keepersize);
-	pgstat_report_allocated_bytes_decrease(deallocation, PG_ALLOC_ASET);
+
+	if (deallocation)
+		pgstat_report_allocated_bytes_decrease(deallocation, PG_ALLOC_ASET);
 
 	/* Reset block size allocation sequence, too */
 	set->nextBlockSize = set->initBlockSize;
